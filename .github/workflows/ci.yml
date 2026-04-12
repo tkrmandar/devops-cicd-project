@@ -241,3 +241,4 @@ jobs:
           echo "✅ Image pushed successfully!"
           echo "📦 Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
           echo "📦 Image: ${{ env.IMAGE_NAME }}:latest"
+
