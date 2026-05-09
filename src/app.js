@@ -8,6 +8,7 @@ app.use(express.json());
 
 let tasks = [];
 
+// setup the routes for application
 app.get('/', (req, res) => res.json({ message: 'Task Manager API', version: '1.0.0' }));
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy', uptime: process.uptime() }));
