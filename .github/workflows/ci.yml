@@ -294,3 +294,72 @@ jobs:
             git push
             echo "✅ K8s manifest updated successfully"
           }
+
+# ============================================================
+# JOB 9 - CD: UPDATE PROD IMAGE TAG (idle slot only)
+# ============================================================
+  update-prod-manifest:
+    name: 🚀 Update Prod K8s Manifest
+    runs-on: ubuntu-latest
+    needs: update-k8s-manifest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout K8s manifests repo
+        uses: actions/checkout@v4
+        with:
+          repository: tkrmandar/devops-k8s-manifests
+          token: ${{ secrets.K8S_REPO_TOKEN }}
+          path: k8s-manifests
+
+      - name: Find idle prod slot
+        id: find-slot
+        run: |
+          cd k8s-manifests
+
+          # Read current active slot from ingress
+          ACTIVE=$(grep "name: task-manager-api-" prod/ingress.yaml \
+            | grep "svc" \
+            | sed 's/.*task-manager-api-\(.*\)-svc.*/\1/')
+
+          echo "Active slot: $ACTIVE"
+
+          # Set idle slot
+          if [ "$ACTIVE" == "blue" ]; then
+            IDLE="green"
+          else
+            IDLE="blue"
+          fi
+
+          echo "Idle slot (deploy target): $IDLE"
+          echo "idle_slot=$IDLE" >> $GITHUB_OUTPUT
+
+      - name: Update image tag in idle prod slot
+        run: |
+          cd k8s-manifests
+          IDLE="${{ steps.find-slot.outputs.idle_slot }}"
+
+          echo "Updating $IDLE slot with new image..."
+          grep "image:" prod/$IDLE/deployment.yaml
+
+          sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:.*|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:${{ github.sha }}|g" prod/$IDLE/deployment.yaml
+
+          echo "Updated image:"
+          grep "image:" prod/$IDLE/deployment.yaml
+
+      - name: Commit and push
+        run: |
+          cd k8s-manifests
+
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+          git diff --exit-code prod/ || {
+            git add prod/
+            git commit -m "ci: update prod idle slot image to ${{ github.sha }}
+
+            Triggered by: ${{ github.actor }}
+            Commit: ${{ github.sha }}"
+            git push
+            echo "✅ Prod manifest updated"
+          }
