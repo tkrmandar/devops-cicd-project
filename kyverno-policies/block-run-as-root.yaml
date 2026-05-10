@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-run-as-root
+  annotations:
+    policies.kyverno.io/title: Block Run as Root
+    policies.kyverno.io/description: >
+      Containers running as root have elevated privileges.
+      All containers must run as non-root user.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: block-root-user
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - dev
+          - prod
+    validate:
+      message: >
+        ❌ Running as root is not allowed!
+        Add securityContext.runAsNonRoot: true to your container spec.
+      pattern:
+        spec:
+          containers:
+          - securityContext:
+              runAsNonRoot: true    # must explicitly be set to true

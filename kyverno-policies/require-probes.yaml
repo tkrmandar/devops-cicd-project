@@ -1,0 +1,37 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-probes
+  annotations:
+    policies.kyverno.io/title: Require Liveness and Readiness Probes
+    policies.kyverno.io/description: >
+      All containers must define liveness and readiness probes
+      so Kubernetes knows when to restart or stop sending traffic.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: require-liveness-probe
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - dev
+          - prod
+    validate:
+      message: >
+        ❌ Liveness and Readiness probes are required!
+        Add livenessProbe and readinessProbe to your container spec.
+      pattern:
+        spec:
+          containers:
+          - livenessProbe:
+              httpGet:
+                path: "?*"
+                port: "?*"
+            readinessProbe:
+              httpGet:
+                path: "?*"
+                port: "?*"

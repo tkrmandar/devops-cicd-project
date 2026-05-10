@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Block Privileged Containers
+    policies.kyverno.io/description: >
+      Privileged containers have full access to host system.
+      This policy blocks any container running in privileged mode.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: block-privileged
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - dev
+          - prod
+    validate:
+      message: >
+        ❌ Privileged containers are not allowed!
+        Remove securityContext.privileged: true from your manifest.
+      pattern:
+        spec:
+          containers:
+          - =(securityContext):       # = means optional field
+              =(privileged): false    # if exists must be false

@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-trusted-registry
+  annotations:
+    policies.kyverno.io/title: Require Trusted Registry
+    policies.kyverno.io/description: >
+      Only images from trusted registries are allowed.
+      This prevents pulling images from unknown sources.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: trusted-registry-only
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - dev
+          - prod
+    validate:
+      message: >
+        ❌ Image must be from a trusted registry!
+        Allowed registries: docker.io, ghcr.io
+        Your image must start with your DockerHub username.
+      pattern:
+        spec:
+          containers:
+          - image: "docker.io/* | */task-manager-api:*"

@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-latest-tag
+  annotations:
+    policies.kyverno.io/title: Block Latest Tag
+    policies.kyverno.io/description: >
+      Blocks deployment of images using latest tag.
+      All images must use specific version tags for traceability.
+spec:
+  validationFailureAction: Enforce    # Enforce = block, Audit = just warn
+  background: true
+  rules:
+  - name: block-latest-tag
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - dev
+          - prod
+    validate:
+      message: >
+        ❌ Image tag 'latest' is not allowed!
+        Use a specific image tag (e.g. commit SHA) for traceability.
+        Example: myimage:a0ad4da3f8b9c2d1
+      pattern:
+        spec:
+          containers:
+          - image: "!*:latest"    # block any image ending with :latest
