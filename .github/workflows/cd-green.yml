@@ -1,0 +1,146 @@
+name: CD - Deploy to PROD GREEN
+
+on:
+  workflow_dispatch:        # manual trigger only
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (commit SHA)'
+        required: true
+        type: string
+      release_notes:
+        description: 'What is included in this release?'
+        required: true
+        type: string
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/task-manager-api
+
+jobs:
+
+# ============================================================
+# JOB 1 - APPROVAL GATE 1: Deploy to GREEN
+# ============================================================
+  approval-gate-1:
+    name: ⏸️ Waiting for Approval — Deploy to GREEN
+    runs-on: ubuntu-latest
+    environment: prod-green       # ← this triggers approval gate!
+    steps:
+      - name: Approval received
+        run: |
+          echo "✅ Approval received!"
+          echo "📦 Image tag    : ${{ github.event.inputs.image_tag }}"
+          echo "📝 Release notes: ${{ github.event.inputs.release_notes }}"
+          echo "👤 Approved by  : ${{ github.actor }}"
+          echo "🕐 Time         : $(date)"
+
+# ============================================================
+# JOB 2 - DEPLOY TO PROD GREEN
+# ============================================================
+  deploy-green:
+    name: 🟢 Deploy to PROD GREEN
+    runs-on: ubuntu-latest
+    needs: approval-gate-1
+    steps:
+      - name: Checkout K8s manifests repo
+        uses: actions/checkout@v4
+        with:
+          repository: tkrmandar/devops-k8s-manifests
+          token: ${{ secrets.K8S_REPO_TOKEN }}
+          path: k8s-manifests
+
+      - name: Update image tag in GREEN deployment
+        run: |
+          cd k8s-manifests
+          echo "📦 Deploying image: ${{ github.event.inputs.image_tag }}"
+          echo "Current image:"
+          grep "image:" prod/green/deployment.yaml
+
+          sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:.*|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:${{ github.event.inputs.image_tag }}|g" prod/green/deployment.yaml
+
+          echo "Updated image:"
+          grep "image:" prod/green/deployment.yaml
+
+      - name: Commit and push
+        run: |
+          cd k8s-manifests
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+          git diff --exit-code prod/green/deployment.yaml || {
+            git add prod/green/deployment.yaml
+            git commit -m "cd: deploy image ${{ github.event.inputs.image_tag }} to prod-green
+
+            Release notes: ${{ github.event.inputs.release_notes }}
+            Approved by: ${{ github.actor }}"
+            git push
+            echo "✅ GREEN manifest updated"
+          }
+
+# ============================================================
+# JOB 3 - SMOKE TEST GREEN
+# ============================================================
+  smoke-test-green:
+    name: 🧪 Smoke Test PROD GREEN
+    runs-on: ubuntu-latest
+    needs: deploy-green
+    steps:
+      - name: Wait for ArgoCD to sync
+        run: |
+          echo "⏳ Waiting 30s for ArgoCD to detect and sync changes..."
+          sleep 30
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: Run smoke tests on GREEN
+        run: |
+          echo "🧪 Running smoke tests on GREEN slot..."
+
+          # Get green pod name
+          GREEN_POD=$(kubectl get pods -n prod \
+            -l app=task-manager-api,slot=green \
+            -o jsonpath='{.items[0].metadata.name}')
+
+          echo "Testing pod: $GREEN_POD"
+
+          # Test health endpoint via port-forward
+          kubectl port-forward pod/$GREEN_POD 3001:3000 -n prod &
+          PF_PID=$!
+          sleep 5
+
+          # Run health check
+          HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/health)
+          ROOT=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/)
+          TASKS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/tasks)
+
+          kill $PF_PID
+
+          echo "Health endpoint  : $HEALTH"
+          echo "Root endpoint    : $ROOT"
+          echo "Tasks endpoint   : $TASKS"
+
+          # Fail if any endpoint returns non-200
+          if [ "$HEALTH" != "200" ] || [ "$ROOT" != "200" ] || [ "$TASKS" != "200" ]; then
+            echo "❌ Smoke tests FAILED!"
+            exit 1
+          fi
+
+          echo "✅ All smoke tests passed!"
+
+      - name: Notify — GREEN ready for verification
+        run: |
+          echo "================================================"
+          echo "✅ PROD GREEN deployed and smoke tested!"
+          echo "================================================"
+          echo "📦 Image         : ${{ github.event.inputs.image_tag }}"
+          echo "📝 Release notes : ${{ github.event.inputs.release_notes }}"
+          echo ""
+          echo "👉 Next steps:"
+          echo "   1. Verify GREEN manually"
+          echo "   2. Run cd-switch.yml to switch traffic"
+          echo "================================================"

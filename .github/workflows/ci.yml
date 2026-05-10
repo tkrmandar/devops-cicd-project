@@ -2,12 +2,13 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/task-manager-api
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
 
@@ -17,7 +18,6 @@ jobs:
   test:
     name: 🧪 Lint & Test
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,7 +48,6 @@ jobs:
     name: 🔍 SonarCloud SAST Scan
     runs-on: ubuntu-latest
     needs: test
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -80,7 +79,6 @@ jobs:
     name: 🔐 Secrets Detection
     runs-on: ubuntu-latest
     needs: test
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -99,7 +97,6 @@ jobs:
     name: 🛡️ OWASP Dependency Scan
     runs-on: ubuntu-latest
     needs: test
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -128,7 +125,6 @@ jobs:
     name: 🐳 Build Docker Image
     runs-on: ubuntu-latest
     needs: [sonarcloud, gitleaks, owasp]
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -160,7 +156,6 @@ jobs:
     name: 🔬 Trivy Image Scan
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -204,14 +199,13 @@ jobs:
           retention-days: 7
 
 # ============================================================
-# JOB 7 - PUSH TO DOCKER HUB (only if all scans pass)
+# JOB 7 - PUSH TO DOCKER HUB
 # ============================================================
   push:
     name: 🚀 Push to Docker Hub
     runs-on: ubuntu-latest
     needs: trivy
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -236,22 +230,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Image pushed summary
+      - name: Summary
         run: |
           echo "✅ Image pushed successfully!"
           echo "📦 Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          echo "📦 Image: ${{ env.IMAGE_NAME }}:latest"
-
 
 # ============================================================
-# JOB 8 - CD: UPDATE IMAGE TAG IN K8S REPO
+# JOB 8 - CD: AUTO DEPLOY TO DEV ONLY
 # ============================================================
-  update-k8s-manifest:
-    name: 🔄 Update K8s Manifest
+  deploy-dev:
+    name: 🔄 Deploy to DEV
     runs-on: ubuntu-latest
     needs: push
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
     steps:
       - name: Checkout K8s manifests repo
         uses: actions/checkout@v4
@@ -263,103 +254,26 @@ jobs:
       - name: Update image tag in dev deployment
         run: |
           cd k8s-manifests
-
-          # Show current image tag
-          echo "Current image tag:"
+          echo "Current image:"
           grep "image:" dev/deployment.yaml
 
-          # Update image tag to new commit SHA
           sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:.*|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:${{ github.sha }}|g" dev/deployment.yaml
 
-          # Show updated image tag
-          echo "Updated image tag:"
-          grep "image:" dev/deployment.yaml
-
-      - name: Commit and push changes
-        run: |
-          cd k8s-manifests
-
-          # Configure git
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
-
-          # Check if anything changed
-          git diff --exit-code dev/deployment.yaml || {
-            git add dev/deployment.yaml
-            git commit -m "ci: update dev image tag to ${{ github.sha }}
-
-            Triggered by: ${{ github.actor }}
-            Commit: ${{ github.sha }}
-            Repo: ${{ github.repository }}"
-            git push
-            echo "✅ K8s manifest updated successfully"
-          }
-
-# ============================================================
-# JOB 9 - CD: UPDATE PROD IMAGE TAG (idle slot only)
-# ============================================================
-  update-prod-manifest:
-    name: 🚀 Update Prod K8s Manifest
-    runs-on: ubuntu-latest
-    needs: update-k8s-manifest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - name: Checkout K8s manifests repo
-        uses: actions/checkout@v4
-        with:
-          repository: tkrmandar/devops-k8s-manifests
-          token: ${{ secrets.K8S_REPO_TOKEN }}
-          path: k8s-manifests
-
-      - name: Find idle prod slot
-        id: find-slot
-        run: |
-          cd k8s-manifests
-
-          # Read current active slot from ingress
-          ACTIVE=$(grep "name: task-manager-api-" prod/ingress.yaml \
-            | grep "svc" \
-            | sed 's/.*task-manager-api-\(.*\)-svc.*/\1/')
-
-          echo "Active slot: $ACTIVE"
-
-          # Set idle slot
-          if [ "$ACTIVE" == "blue" ]; then
-            IDLE="green"
-          else
-            IDLE="blue"
-          fi
-
-          echo "Idle slot (deploy target): $IDLE"
-          echo "idle_slot=$IDLE" >> $GITHUB_OUTPUT
-
-      - name: Update image tag in idle prod slot
-        run: |
-          cd k8s-manifests
-          IDLE="${{ steps.find-slot.outputs.idle_slot }}"
-
-          echo "Updating $IDLE slot with new image..."
-          grep "image:" prod/$IDLE/deployment.yaml
-
-          sed -i "s|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:.*|image: ${{ secrets.DOCKER_USERNAME }}/task-manager-api:${{ github.sha }}|g" prod/$IDLE/deployment.yaml
-
           echo "Updated image:"
-          grep "image:" prod/$IDLE/deployment.yaml
+          grep "image:" dev/deployment.yaml
 
       - name: Commit and push
         run: |
           cd k8s-manifests
-
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
 
-          git diff --exit-code prod/ || {
-            git add prod/
-            git commit -m "ci: update prod idle slot image to ${{ github.sha }}
+          git diff --exit-code dev/deployment.yaml || {
+            git add dev/deployment.yaml
+            git commit -m "ci: update dev image to ${{ github.sha }}
 
             Triggered by: ${{ github.actor }}
             Commit: ${{ github.sha }}"
             git push
-            echo "✅ Prod manifest updated"
+            echo "✅ DEV manifest updated — ArgoCD will auto deploy"
           }

@@ -1,0 +1,88 @@
+name: 🚨 Emergency Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_slot:
+        description: 'Rollback traffic to which slot?'
+        required: true
+        type: choice
+        options:
+        - blue
+        - green
+      reason:
+        description: 'Reason for rollback'
+        required: true
+        type: string
+
+jobs:
+
+# ============================================================
+# EMERGENCY ROLLBACK — No approval needed, instant!
+# ============================================================
+  rollback:
+    name: 🚨 Emergency Rollback to ${{ github.event.inputs.target_slot }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout K8s manifests repo
+        uses: actions/checkout@v4
+        with:
+          repository: tkrmandar/devops-k8s-manifests
+          token: ${{ secrets.K8S_REPO_TOKEN }}
+          path: k8s-manifests
+
+      - name: Execute rollback
+        run: |
+          cd k8s-manifests
+          TARGET="${{ github.event.inputs.target_slot }}"
+
+          echo "🚨 EMERGENCY ROLLBACK"
+          echo "Target slot : $TARGET"
+          echo "Reason      : ${{ github.event.inputs.reason }}"
+          echo "Initiated by: ${{ github.actor }}"
+          echo "Time        : $(date)"
+
+          echo ""
+          echo "Current ingress:"
+          grep "name: task-manager-api" prod/ingress.yaml | grep svc
+
+          # Switch to target slot
+          if [ "$TARGET" == "blue" ]; then
+            sed -i "s|name: task-manager-api-green-svc|name: task-manager-api-blue-svc|g" prod/ingress.yaml
+          else
+            sed -i "s|name: task-manager-api-blue-svc|name: task-manager-api-green-svc|g" prod/ingress.yaml
+          fi
+
+          echo ""
+          echo "Updated ingress:"
+          grep "name: task-manager-api" prod/ingress.yaml | grep svc
+
+      - name: Commit and push rollback
+        run: |
+          cd k8s-manifests
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+          git diff --exit-code prod/ingress.yaml || {
+            git add prod/ingress.yaml
+            git commit -m "EMERGENCY ROLLBACK: traffic switched to ${{ github.event.inputs.target_slot }}
+
+            Reason      : ${{ github.event.inputs.reason }}
+            Initiated by: ${{ github.actor }}
+            Time        : $(date)"
+            git push
+            echo "✅ ROLLBACK COMPLETE!"
+          }
+
+      - name: Rollback summary
+        run: |
+          echo "================================================"
+          echo "🚨 EMERGENCY ROLLBACK COMPLETE"
+          echo "================================================"
+          echo "Traffic now on : ${{ github.event.inputs.target_slot }}"
+          echo "Reason         : ${{ github.event.inputs.reason }}"
+          echo "Initiated by   : ${{ github.actor }}"
+          echo "Time           : $(date)"
+          echo ""
+          echo "⚠️  ArgoCD will sync changes within 3 minutes"
+          echo "================================================"
